@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>org.giltene</groupId>
+    <artifactId>PauselessHashMap</artifactId>
+    <version>1.0-SNAPSHOT</version>
+
+    <name>PauselessHashMap</name>
+
+    <url>https://github.com/giltene/PauselessHashMap</url>
+
+    <description>
+        PauselessHashMap: A java.util.HashMap compatible Map implementation that
+        performs background resizing for inserts, avoiding the common "resize/rehash"
+        outlier experienced by normal HashMap.
+
+        get() and put() operations are "pauseless" in the sense that they do not
+        block during resizing of the map. Other operations, like remove(), putAll(),
+        clear(), and the derivation of keysets and such *will* block for pending
+        resize operations.
+    </description>
+
+    <licenses>
+        <license>
+            <comments>
+                *  Licensed to the Apache Software Foundation (ASF) under one or more
+                *  contributor license agreements.  See the NOTICE file distributed with
+                *  this work for additional information regarding copyright ownership.
+                *  The ASF licenses this file to You under the Apache License, Version 2.0
+                *  (the "License"); you may not use this file except in compliance with
+                *  the License.  You may obtain a copy of the License at
+                *
+                *     http://www.apache.org/licenses/LICENSE-2.0
+                *
+                *  Unless required by applicable law or agreed to in writing, software
+                *  distributed under the License is distributed on an "AS IS" BASIS,
+                *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+                *  See the License for the specific language governing permissions and
+                *  limitations under the License.
+            </comments>
+            <name>Apache License, Version 2.0</name>
+            <url>http://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>giltene</id>
+            <name>Gil Tene</name>
+            <url>https://github.com/giltene</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <url>scm:git:git://github.com/giltene/PauselessHashMap.git</url>
+        <connection>scm:git:git://github.com/giltene/PauselessHashMap.git</connection>
+        <developerConnection>scm:git:git@github.com:giltene/PauselessHashMap.git</developerConnection>
+    </scm>
+
+
+    <issueManagement>
+        <url>https://github.com/giltene/PauselessHashMap/issues</url>
+        <system>GitHub Issues</system>
+    </issueManagement>
+
+    <packaging>jar</packaging>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <inherited>true</inherited>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+                            <addDefaultSpecificationEntries>true</addDefaultSpecificationEntries>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>2.9.1</version>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>2.2.1</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>2.3.2</version>
+                <configuration>
+                    <source>1.6</source>
+                    <target>1.6</target>
+                    <encoding>UTF-8</encoding>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>2.12.4</version>
+                <configuration>
+                    <enableAssertions>false</enableAssertions>
+                    <excludes>
+                        <exclude>**/support/*.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-release-plugin</artifactId>
+                <version>2.2.2</version>
+                <configuration>
+                    <arguments>-Dgpg.passphrase=${gpg.passphrase}</arguments>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>release-sign-artifacts</id>
+            <activation>
+                <property>
+                    <name>performRelease</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>1.4</version>
+                        <configuration>
+                            <passphrase>${gpg.passphrase}</passphrase>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <dependencies>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.10</version>
+            <scope>test/java/org/giltene</scope>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,21 @@
+/*
+ * Written by Gil Tene, based on Apache Harmony version of java.util.HashMap.
+ */
+
+PauselessHashMap: A java.util.HashMap compatible Map implementation that
+performs background resizing for inserts, avoiding the common "resize/rehash"
+outlier experienced by normal HashMap.
+
+get() and put() operations are "pauseless" in the sense that they do not
+block during resizing of the map. Other operations, like remove(), putAll(),
+clear(), and the derivation of keysets and such *will* block for pending
+resize operations.
+
+Like HashMap, PauselessHashMap provides no synchronization or thread-safe
+behaviors on it's own, and MUST be externally synchronized if used by multiple
+threads. The background resizing mechanism relies on the calling program
+enforcing serialized access to all methods, and behavior is undefined if
+concurrent access (for modification or otherwise) is allowed.
+
+And like HashMap, PauselessHashMap is an implementation of Map. All optional
+operations (adding and removing) are supported. Keys and values can be any objects.
