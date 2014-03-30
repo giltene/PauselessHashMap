@@ -835,7 +835,8 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
         if(key == null) {
             entry = findNullKeyEntryInResizingIntoElementData();
         } else {
-            hash = computeHashCode(key);
+            // No need to re-compute hash here, the prior if (key != null) took care of it.
+            // hash = computeHashCode(key);
             index = hash & (resizingIntoElementData.length - 1);
             entry = findNonNullKeyEntryInResizingIntoElementData(key, index, hash);
         }
