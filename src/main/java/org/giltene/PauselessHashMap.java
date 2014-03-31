@@ -783,24 +783,6 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
         int hash = 0;
         V result = null; // Retain previous value to return to caller
 
-        if (resizingIntoElementData != null) {
-            if (!indicatedObservedResizingIntoTable) {
-                // Use non-volatile boolean indicator to avoid reading or writing volatile one unless needed:
-                indicatedObservedResizingIntoTable = true;
-                observedResizingIntoTable = true;
-            }
-            // backgroundResizeComplete is (very intentionally) not volatile, which means that we may
-            // "take a while" before noticing a completed background resize operation. E.g., if put
-            // does not insert, no forced barriers are sure to occur that would cause us to observe a new
-            // backgroundResizeComplete value. However, since any insert (in this state) will use
-            // a CAS operation, which has volatile read+write semantics, it will force this thread to
-            // re-read backgroundResizeComplete after the insert.
-            // We are therefore assured that at most one extra insert will happen before we notice this...
-            if (backgroundResizeComplete) {
-                finishResizing();
-            }
-        }
-
         if(key == null) {
             entry = findNullKeyEntryInElementData();
         } else {
@@ -828,6 +810,15 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
             // (only) if we found an entry before, update it:
             result = entry.value;
             entry.value = value;
+
+            // If an entry already exists for this key, make sure the key we use from now on
+            // is the actual key instance found in the original matching entry, and not just
+            // the input key that matches it. This makes sure no new key instances are
+            // introduced into the map when non-inserting puts  happen during resizing.
+            // If we need to create a new entry in the target array to satisfy the put,
+            // we'll want to create it with the same key instance.
+            key = entry.key;
+
             // Need to force a StoreStore fence here to order against next update:
             volatileUpdateIndicator.lazySet(true);
         }
@@ -843,21 +834,32 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
 
         if (entry == null) {
             entry = createHashedEntry(key, index, hash);
-            entry.value = value;
-
             modCount++;
-            if (++elementCount > threshold) {
-                rehash();
-            }
-
-            return null;
-        }
-
-        if (result == null) {
+            elementCount++;
+        } else  if (result == null) {
             // If no result value was retained from previous find, retain this one.
             result = entry.value;
         }
         entry.value = value;
+
+        // We know that (resizingIntoElementData != null). coordinate with background resize:
+
+        if (!indicatedObservedResizingIntoTable) {
+            // Use non-volatile boolean indicator to avoid reading or writing volatile one unless needed:
+            indicatedObservedResizingIntoTable = true;
+            observedResizingIntoTable = true;
+        }
+
+        // backgroundResizeComplete is (very intentionally) not volatile, which means that we may
+        // "take a while" before noticing a completed background resize operation. E.g., if put
+        // does not insert, no forced barriers are sure to occur that would cause us to observe a new
+        // backgroundResizeComplete value. However, since any insert (in this state) will use
+        // a CAS operation, which has volatile read+write semantics, it will force this thread to
+        // re-read backgroundResizeComplete after the insert.
+        // We are therefore assured that at most one extra insert will happen before we notice this...
+        if (backgroundResizeComplete) {
+            finishResizing();
+        }
 
         return result;
     }
@@ -889,6 +891,10 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
         backgroundResizeComplete = false;
         pendingResize = false;
         volatileUpdateIndicator.lazySet(false);
+        // Kick off another resize if things have accumulated to that level:
+        if (elementCount > threshold) {
+            rehash();
+        }
     }
 
 
@@ -1265,11 +1271,62 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
         final PauselessHashMap<K, V> associatedMap;
         final int capacity;
         final boolean isSynchronous;
+        Entry<K,V>[] cachedExpectdHeadsArray = null; // Used to avoid uniqueness scans where possible
 
         Resizer(PauselessHashMap<K, V> hm, int capacity, boolean isSynchronous) {
             associatedMap = hm;
             this.capacity = capacity;
             this.isSynchronous = isSynchronous;
+        }
+
+        void insertUniqueEquivalentAtHeadOfBucket(Entry<K, V> existingEntry, int bucketIndex) {
+            K key = existingEntry.key;
+            int keyHash = existingEntry.origKeyHash;
+            Entry<K, V> newEntry = new Entry<K, V>(key, existingEntry.value);
+            newEntry.setInvalid();
+            boolean keyFound = false;
+
+            Entry<K,V> targetBucketHead;
+            do {
+                targetBucketHead = resizingIntoElementData[bucketIndex];
+                newEntry.next = targetBucketHead;
+
+                if (!isSynchronous) {
+                    // Verify the entry will be unique in the target bucket:
+
+                    if (cachedExpectdHeadsArray[bucketIndex] != targetBucketHead) {
+                        // If the head does is not the one we expect it to be (i.e. null or
+                        // the one we put in there before) then the mutator has inserted
+                        // something, and we need to actually scan the bucket to verify
+                        // that an entry with the same key has not been inserted:
+
+                        if (key == null) {
+                            keyFound = (findNullKeyEntryInChain(targetBucketHead) != null);
+                        } else {
+                            keyFound = (findNonNullKeyEntryInChain(key, targetBucketHead, keyHash) != null);
+                        }
+
+                        // This key is already in there, and that entry takes precedence:
+                        if (keyFound)
+                            return;
+                    }
+                }
+
+                // We are potentially racing against a putting mutator, so a CAS is needed:
+            } while (!EntryArrayHelper.compareAndSet(resizingIntoElementData, bucketIndex, targetBucketHead, newEntry));
+
+            // Cache this entry as the expected head for this bucket:
+            cachedExpectdHeadsArray[bucketIndex] = newEntry;
+
+            // there is a StoreStore fence ahead of here due to the CAS above
+
+            // From now on, puts to existing entry will be sure to change both entries
+            newEntry.value = existingEntry.value; // Existing entry MAY have been changed by racing put() call.
+
+            // Force a StoreStore fence:
+            volatileUpdateIndicator.lazySet(true);
+
+            newEntry.setValid();
         }
 
         @SuppressWarnings("unchecked")
@@ -1288,6 +1345,8 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
 
                 if (isSynchronous) {
                     observedResizingIntoTable = true;
+                } else {
+                    cachedExpectdHeadsArray = newElementArray(length);
                 }
 
                 if (!observedResizingIntoTable) {
@@ -1303,26 +1362,10 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
                     Entry<K, V> existingEntry = elementData[i];
 
                     while (existingEntry != null) {
-                        int index = existingEntry.origKeyHash & (length - 1);
-                        Entry<K, V> newEntry = new Entry<K, V>(existingEntry.key, existingEntry.value);
-                        newEntry.setInvalid();
+                        int bucketIndex = existingEntry.origKeyHash & (length - 1);
 
-                        // We can be racing with a foreground put op. So a CAS is needed:
-                        Entry<K,V> currentHead;
-                        do {
-                            currentHead = resizingIntoElementData[index];
-                            newEntry.next = currentHead;
-                        } while (!EntryArrayHelper.compareAndSet(resizingIntoElementData, index, currentHead, newEntry));
+                        insertUniqueEquivalentAtHeadOfBucket(existingEntry, bucketIndex);
 
-                        // there is a StoreStore fence ahead of here due to the CAS above
-
-                        // From now on, puts to existing entry will be sure to change both entries
-                        newEntry.value = existingEntry.value; // Existing entry May have been changed by racing put() call.
-
-                        // Force a StoreStore fence:
-                        volatileUpdateIndicator.lazySet(!boolval);
-
-                        newEntry.setValid();
                         existingEntry = existingEntry.next;
                     }
                     elementData[i] = null;
@@ -1330,6 +1373,9 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
 
                 // Force a StoreStore fence:
                 volatileUpdateIndicator.lazySet(!boolval);
+
+                // We don't need the expected head cache any more:
+                cachedExpectdHeadsArray = null;
 
                 computeThreshold();
                 backgroundResizeComplete = true;
