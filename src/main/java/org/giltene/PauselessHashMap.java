@@ -108,6 +108,12 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
      */
     transient boolean pendingResize = false;
 
+    /**
+     * needToKickOffAnotherBackgroundResize: A true value indicates a background resize
+     * needs to be kicked off (even if pendingResize is true)
+     */
+    transient boolean needToKickOffAnotherBackgroundResize = false;
+
     /*
      * backgroundResizeComplete: A true value indicates that the currently in-progress
      * resizing has completed all background operations.
@@ -137,13 +143,19 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
      */
     transient final Object rehashMonitor = new Object();
 
+
+    /*
+     * cachedExpectedHeadsArray: Used to avoid uniqueness scans where possible during background resizing
+     */
+    transient Entry<K,V>[] cachedExpectedHeadsArray = null;
+
     // keySet and valuesCollection are taken from Apache Harmony's java.util.AbstractMap. They do
     // Not exist in Java SE version...
 
     // Lazily initialized key set.
-    Set<K> keySet;
+    transient Set<K> keySet;
 
-    Collection<V> valuesCollection;
+    transient Collection<V> valuesCollection;
 
     static class Entry<K, V> extends InternalMapEntry<K, V> {
         final int origKeyHash;
@@ -806,6 +818,13 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
             return result;
         }
 
+        // Coordinate with the pending background resize:
+        if (!indicatedObservedResizingIntoTable) {
+            // Use non-volatile boolean indicator to avoid reading or writing volatile one unless needed:
+            indicatedObservedResizingIntoTable = true;
+            observedResizingIntoTable = true;
+        }
+
         if (entry != null) {
             // (only) if we found an entry before, update it:
             result = entry.value;
@@ -823,32 +842,33 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
             volatileUpdateIndicator.lazySet(true);
         }
 
+        Entry<K,V> resizingIntoEntry;
+
         if(key == null) {
-            entry = findNullKeyEntryInResizingIntoElementData();
+            resizingIntoEntry = findNullKeyEntryInResizingIntoElementData();
         } else {
             // No need to re-compute hash here, the prior if (key != null) took care of it.
             // hash = computeHashCode(key);
             index = hash & (resizingIntoElementData.length - 1);
-            entry = findNonNullKeyEntryInResizingIntoElementData(key, index, hash);
+            resizingIntoEntry = findNonNullKeyEntryInResizingIntoElementData(key, index, hash);
         }
 
-        if (entry == null) {
-            entry = createHashedEntry(key, index, hash);
-            modCount++;
-            elementCount++;
+        if (resizingIntoEntry == null) {
+            resizingIntoEntry = createHashedEntry(key, index, hash);
+            if (entry == null) {
+                // We should only count this as an actual addition if no entry was
+                // found in the elementData scan done earlier. If one was found there,
+                // this insertion is simply covering a resizing race, and no actual
+                // net new entries are being created.
+                modCount++;
+                elementCount++;
+            }
         } else  if (result == null) {
             // If no result value was retained from previous find, retain this one.
-            result = entry.value;
+            result = resizingIntoEntry.value;
         }
-        entry.value = value;
 
-        // We know that (resizingIntoElementData != null). coordinate with background resize:
-
-        if (!indicatedObservedResizingIntoTable) {
-            // Use non-volatile boolean indicator to avoid reading or writing volatile one unless needed:
-            indicatedObservedResizingIntoTable = true;
-            observedResizingIntoTable = true;
-        }
+        resizingIntoEntry.value = value;
 
         // backgroundResizeComplete is (very intentionally) not volatile, which means that we may
         // "take a while" before noticing a completed background resize operation. E.g., if put
@@ -859,6 +879,11 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
         // We are therefore assured that at most one extra insert will happen before we notice this...
         if (backgroundResizeComplete) {
             finishResizing();
+        }
+
+        // Make sure to kick off a resize if needed:
+        if (needToKickOffAnotherBackgroundResize) {
+            rehash();
         }
 
         return result;
@@ -873,6 +898,9 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
                     } else {
                         if (resizingIntoElementData != null) {
                             observedResizingIntoTable = true;
+                        }
+                        if (needToKickOffAnotherBackgroundResize) {
+                            rehash();
                         }
                         // Still in progress or pending, wait for a kick:
                         rehashMonitor.wait(1);
@@ -958,13 +986,13 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
     }
 
     void rehash(int capacity) {
-        if (!pendingResize) {
+        if (needToKickOffAnotherBackgroundResize || !pendingResize) {
             kickoffBackgroundResize(capacity);
         }
     }
 
     void rehash() {
-        if (!pendingResize) {
+        if (needToKickOffAnotherBackgroundResize || !pendingResize) {
             kickoffBackgroundResize(elementData.length);
         }
         // rehash(elementData.length);
@@ -1271,7 +1299,7 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
         final PauselessHashMap<K, V> associatedMap;
         final int capacity;
         final boolean isSynchronous;
-        Entry<K,V>[] cachedExpectdHeadsArray = null; // Used to avoid uniqueness scans where possible
+        long startTimeNsec = 0;
 
         Resizer(PauselessHashMap<K, V> hm, int capacity, boolean isSynchronous) {
             associatedMap = hm;
@@ -1294,7 +1322,7 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
                 if (!isSynchronous) {
                     // Verify the entry will be unique in the target bucket:
 
-                    if (cachedExpectdHeadsArray[bucketIndex] != targetBucketHead) {
+                    if (cachedExpectedHeadsArray[bucketIndex] != targetBucketHead) {
                         // If the head does is not the one we expect it to be (i.e. null or
                         // the one we put in there before) then the mutator has inserted
                         // something, and we need to actually scan the bucket to verify
@@ -1315,8 +1343,10 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
                 // We are potentially racing against a putting mutator, so a CAS is needed:
             } while (!EntryArrayHelper.compareAndSet(resizingIntoElementData, bucketIndex, targetBucketHead, newEntry));
 
-            // Cache this entry as the expected head for this bucket:
-            cachedExpectdHeadsArray[bucketIndex] = newEntry;
+            if (!isSynchronous) {
+                // Cache this entry as the expected head for this bucket:
+                cachedExpectedHeadsArray[bucketIndex] = newEntry;
+            }
 
             // there is a StoreStore fence ahead of here due to the CAS above
 
@@ -1331,30 +1361,51 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
 
         @SuppressWarnings("unchecked")
         public void run() {
+            if (startTimeNsec == 0) {
+                startTimeNsec = System.nanoTime();
+            }
+
             synchronized (rehashMonitor) {
                 boolean boolval;
 
-                int length = calculateCapacity((capacity == 0 ? 1 : capacity << 1));
+                // Fast forward to make room for at least the current count. Useful for cases
+                // where inserts are happening so quickly that the capacity used to trigger
+                // the resizer is stale by the time we get here...
+                int needed_capacity  = Math.max(capacity, (int)(elementCount / loadFactor));
 
-                if ((resizingIntoElementData == null) || (resizingIntoElementData.length < length)) {
-                    resizingIntoElementData = newElementArray(length);
+                needed_capacity = calculateCapacity((capacity == 0 ? 1 : needed_capacity << 1));
+
+                if (resizingIntoElementData == null) {
+                    resizingIntoElementData = newElementArray(needed_capacity);
+                    if (!isSynchronous) {
+                        cachedExpectedHeadsArray = newElementArray(needed_capacity);
+                    }
                 }
+
+                int length = resizingIntoElementData.length;
+
                 // Force a full fence:
                 boolval = volatileUpdateIndicator.get();
                 volatileUpdateIndicator.set(!boolval);
 
                 if (isSynchronous) {
                     observedResizingIntoTable = true;
-                } else {
-                    cachedExpectdHeadsArray = newElementArray(length);
                 }
 
                 if (!observedResizingIntoTable) {
                     // This is effectively a spin-wait until the mutator has signaled that it has
                     // observed the new Element array.
+
+                    if ((System.nanoTime() - startTimeNsec) > NSEC_TIME_TO_SPINWAIT_IN_RESIZER_BEFORE_GIVING_UP) {
+                        // stop spinning, and instead make a future mutator op kick off another resizer.
+                        needToKickOffAnotherBackgroundResize = true;
+                        return;
+                    }
+
                     // We spin wait by scheduling ourselves for a new execution so as not to block other
                     // users of the executors thread pool.
                     backgroundResizers.schedule(this, 1, TimeUnit.MILLISECONDS);
+
                     return;
                 }
 
@@ -1375,7 +1426,7 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
                 volatileUpdateIndicator.lazySet(!boolval);
 
                 // We don't need the expected head cache any more:
-                cachedExpectdHeadsArray = null;
+                cachedExpectedHeadsArray = null;
 
                 computeThreshold();
                 backgroundResizeComplete = true;
@@ -1384,9 +1435,11 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
         }
     }
 
+    static final long NSEC_TIME_TO_SPINWAIT_IN_RESIZER_BEFORE_GIVING_UP = 100 * 1000L * 1000L;
+
     static final int DEFAULT_NUMBER_OF_BACKGROUND_RESIZER_EXECUTOR_THREADS = 2;
 
-    static final int SMALLEST_CAPACITY_TO_KICK_OFF_BACKGROUND_RESIZE_FOR = 0;
+    static final int SMALLEST_CAPACITY_TO_KICK_OFF_BACKGROUND_RESIZE_FOR = 256;
 
     static final ScheduledExecutorService backgroundResizers =
             Executors.newScheduledThreadPool(DEFAULT_NUMBER_OF_BACKGROUND_RESIZER_EXECUTOR_THREADS);
@@ -1400,6 +1453,7 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
 
         // Big enough to do in the background:
         pendingResize = true;
+        needToKickOffAnotherBackgroundResize = false;
         backgroundResizers.execute(new Resizer(this, capacity, false /* non-synchronous */));
 
         /* the following commented out code is here to play games with timing, and make bugs
