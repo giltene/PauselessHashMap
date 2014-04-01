@@ -708,7 +708,7 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
     }
 
     final Entry<K,V> findNullKeyEntryInChain(Entry<K,V> chainHead) {
-        while (chainHead != null && chainHead.key != null)
+        while (chainHead != null && ((!chainHead.isValid()) || (chainHead.key != null)))
             chainHead = chainHead.next;
         return chainHead;
     }
