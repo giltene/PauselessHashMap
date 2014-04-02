@@ -34,15 +34,14 @@ noticed, I spend a lot of my time thinking about the behavior of
 latency/response-time/reaction-time. In addition to trying to understand
 and teach about the behavior better (with monitoring and measurement tools
 like HdrHistogram, LatencyUtils, and jHiccup), I actually work on things
-that makes that try to improve bad behavior (for some definitions of
-"improve" and "bad"). Eliminating pausing behavior in GC was the lowest
-hanging fruit, but more recent work has focused on eliminating pauses
-due to things like at-market-open deoptimzations, lock deflation,
-lock de-basing, and all sorts of TTSP (time to safepoint) issues.
-I've also learned a lot about how to bring down Linux's contribution
-to latency spikes.
+that try to improve bad behavior (for some definitions of "improve" and
+"bad"). Eliminating pausing behavior in GC was the lowest hanging fruit,
+but more recent work has focused on eliminating pauses due to things like
+at-market-open deoptimzations, or lock deflation, or de-basing, or all
+sorts of TTSP (time to safepoint) issues. I've also learned a lot about
+how to bring down Linux's contribution to latency spikes.
 
-But the JVM and the OS are not the only things that causes latency spikes.
+But the JVM and the OS are not the only things that cause latency spikes.
 Sometimes your code is just "spiky". In my day job, I keep running into in
 actual, real-world low latency system code that is typically super-fast,
 but occasionally spikes in actual work latency due to some rare but huge
