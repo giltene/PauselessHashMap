@@ -70,7 +70,8 @@ and not on OpenJDK's, in order to make it available without GPLv2 license
 restrictions (for those who may want to include it in non-GPL products).
 The background resizing concept itself is simple, and can be applied just
 as easily to the OpenJDK version (e.g. if some future Java SE version
-wants to use it). You can use (https://svn.apache.org/repos/asf/harmony/enhanced/java/trunk/classlib/modules/luni/src/test/api/common/org/apache/harmony/luni/tests/java/util/HashMapTest.java)
+wants to use it). You can use 
+(https://svn.apache.org/repos/asf/harmony/enhanced/java/trunk/classlib/modules/luni/src/main/java/java/util/HashMap.java)
 as a baseline comparison for the code I started with.
 
 This is also a classic example of how GC makes this sort of concurrent
@@ -83,5 +84,4 @@ where latency doesn't matter nearly as much. This sort of trick would
 be much harder (or slower) to do if GC wasn't there to safely pick up
 the junk behind us, as it would (invariably, I think) add a need for
 additional synchronizing work in the fast path.
-
 
