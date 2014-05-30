@@ -185,5 +185,11 @@
             <version>4.10</version>
             <scope>test/java/org/giltene</scope>
         </dependency>
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava-testlib</artifactId>
+            <version>17.0</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
