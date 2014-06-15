@@ -32,8 +32,10 @@ import java.lang.reflect.Field;
 import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * PauselessHashMap: A java.util.HashMap compatible Map implementation that
@@ -1441,8 +1443,20 @@ public class PauselessHashMap<K, V> extends AbstractMap<K, V> implements Map<K, 
 
     static final int SMALLEST_CAPACITY_TO_KICK_OFF_BACKGROUND_RESIZE_FOR = 256;
 
+    static final AtomicInteger backgroundResizerthreadNumber = new AtomicInteger(0);
+
     static final ScheduledExecutorService backgroundResizers =
-            Executors.newScheduledThreadPool(DEFAULT_NUMBER_OF_BACKGROUND_RESIZER_EXECUTOR_THREADS);
+            Executors.newScheduledThreadPool(DEFAULT_NUMBER_OF_BACKGROUND_RESIZER_EXECUTOR_THREADS,
+                    new ThreadFactory() {
+                        @Override
+                        public Thread newThread(Runnable runnable) {
+                            Thread thread = new Thread(runnable);
+                            thread.setName("PauselessHashMap-resizer-pool-thread-" +
+                                    backgroundResizerthreadNumber.getAndIncrement());
+                            thread.setDaemon(true);
+                            return thread;
+                        }
+                    });
 
     final void kickoffBackgroundResize(int capacity) {
 
